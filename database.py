@@ -68,6 +68,49 @@ class APICallLog(Base):
     response_time = Column(Integer, nullable=True)  # 响应时间（毫秒）
 
 
+class KeepAliveTask(Base):
+    """保活任务表"""
+    __tablename__ = "keep_alive_tasks"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    is_enabled = Column(Boolean, default=True)  # 是否启用
+    schedule_time = Column(String(10), default="00:00")  # 执行时间（HH:MM格式，北京时间）
+    last_run_at = Column(DateTime, nullable=True)  # 上次执行时间
+    last_status = Column(String(20), nullable=True)  # 上次执行状态：success, error, running
+    last_message = Column(String(500), nullable=True)  # 上次执行消息
+    created_at = Column(DateTime, default=get_beijing_time)
+    updated_at = Column(DateTime, default=get_beijing_time, onupdate=get_beijing_time)
+
+
+class KeepAliveLog(Base):
+    """保活任务执行日志表"""
+    __tablename__ = "keep_alive_logs"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    task_id = Column(Integer, nullable=False, index=True)  # 关联的任务ID
+    started_at = Column(DateTime, default=get_beijing_time, index=True)  # 开始时间
+    finished_at = Column(DateTime, nullable=True)  # 结束时间
+    status = Column(String(20), nullable=False)  # success, error, running, cancelled
+    message = Column(String(1000), nullable=True)  # 执行消息
+    accounts_count = Column(Integer, nullable=True)  # 处理的账号数量
+    success_count = Column(Integer, nullable=True)  # 成功数量
+    fail_count = Column(Integer, nullable=True)  # 失败数量
+
+
+class KeepAliveAccountLog(Base):
+    """保活账号级别日志表"""
+    __tablename__ = "keep_alive_account_logs"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    task_log_id = Column(Integer, nullable=False, index=True)  # 关联的任务日志ID
+    account_name = Column(String(200), nullable=False)  # 账号名称
+    account_email = Column(String(200), nullable=True)  # 账号邮箱
+    started_at = Column(DateTime, default=get_beijing_time, index=True)  # 开始时间
+    finished_at = Column(DateTime, nullable=True)  # 结束时间
+    status = Column(String(20), nullable=False)  # success, error, running, cancelled
+    message = Column(String(500), nullable=True)  # 执行消息
+
+
 def init_db():
     """初始化数据库表"""
     Base.metadata.create_all(bind=engine)

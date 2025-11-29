@@ -21,3 +21,6 @@ python-multipart==0.0.20
 
 # WebSocket 支持
 websockets==15.0.1
+
+# 定时任务
+apscheduler==3.10.4

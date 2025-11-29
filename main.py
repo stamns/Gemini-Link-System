@@ -21,8 +21,12 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.triggers.cron import CronTrigger
+import subprocess
+import sys
 
-from database import init_db, get_db, Admin, APIKey, APICallLog
+from database import init_db, get_db, Admin, APIKey, APICallLog, KeepAliveTask, KeepAliveLog, KeepAliveAccountLog
 from auth import (
     hash_password, verify_password, create_access_token, 
     generate_api_key, hash_api_key, get_current_admin, init_admin,
@@ -45,6 +49,11 @@ def _load_env_file(path: str = ".env") -> None:
                 key, value = line.split("=", 1)
                 key = key.strip()
                 value = value.strip()
+                # 去除引号（支持单引号和双引号）
+                if value.startswith('"') and value.endswith('"'):
+                    value = value[1:-1]
+                elif value.startswith("'") and value.endswith("'"):
+                    value = value[1:-1]
                 if key and key not in os.environ:
                     os.environ[key] = value
     except Exception:
@@ -94,7 +103,13 @@ SECURE_C_SES = os.getenv("SECURE_C_SES")
 HOST_C_OSES = os.getenv("HOST_C_OSES")
 CSESIDX = os.getenv("CSESIDX")
 CONFIG_ID = os.getenv("CONFIG_ID")
-PROXY = os.getenv("PROXY") or None
+PROXY_RAW = os.getenv("PROXY") or None
+# 去除代理配置中可能存在的引号
+if PROXY_RAW:
+    PROXY_RAW = PROXY_RAW.strip().strip('"').strip("'")
+    PROXY = PROXY_RAW if PROXY_RAW else None
+else:
+    PROXY = None
 TIMEOUT_SECONDS = int(os.getenv("TIMEOUT_SECONDS", "600"))
 
 # ---------- 图片生成相关常量 ----------
@@ -181,6 +196,11 @@ class ConnectionManager:
 manager = ConnectionManager()
 
 # ---------- HTTP 客户端 ----------
+# 记录代理配置信息
+if PROXY:
+    logger.info(f"🌐 代理配置: {PROXY}")
+else:
+    logger.info("🌐 未配置代理，使用直连")
 http_client = httpx.AsyncClient(
     proxy=PROXY,
     verify=False,
@@ -384,7 +404,17 @@ def load_accounts_from_env() -> List[Account]:
         if not (secure and csesidx and config_id):
             logger.warning(f"账号索引 {idx} 配置不完整，已跳过")
             continue
+        # 去除可能存在的引号（双重保险）
+        secure = secure.strip().strip('"').strip("'") if secure else None
+        csesidx = csesidx.strip().strip('"').strip("'") if csesidx else None
+        config_id = config_id.strip().strip('"').strip("'") if config_id else None
+        # 去除 config_id 中可能存在的 ?csesidx 后缀
+        if config_id and '?csesidx' in config_id:
+            config_id = config_id.split('?csesidx')[0]
+        host = host.strip().strip('"').strip("'") if host else None
         name = os.getenv(prefix + "NAME") or f"account-{idx}"
+        if name:
+            name = name.strip().strip('"').strip("'")
         accounts.append(
             Account(
                 name=name,
@@ -397,13 +427,21 @@ def load_accounts_from_env() -> List[Account]:
 
     # 兼容旧的单账号环境变量
     if not accounts and SECURE_C_SES and CSESIDX and CONFIG_ID:
+        # 去除可能存在的引号
+        secure_c_ses = SECURE_C_SES.strip().strip('"').strip("'") if SECURE_C_SES else None
+        csesidx = CSESIDX.strip().strip('"').strip("'") if CSESIDX else None
+        config_id = CONFIG_ID.strip().strip('"').strip("'") if CONFIG_ID else None
+        # 去除 config_id 中可能存在的 ?csesidx 后缀
+        if config_id and '?csesidx' in config_id:
+            config_id = config_id.split('?csesidx')[0]
+        host_c_oses = HOST_C_OSES.strip().strip('"').strip("'") if HOST_C_OSES else None
         accounts.append(
             Account(
                 name="default",
-                secure_c_ses=SECURE_C_SES,
-                csesidx=CSESIDX,
-                config_id=CONFIG_ID,
-                host_c_oses=HOST_C_OSES,
+                secure_c_ses=secure_c_ses,
+                csesidx=csesidx,
+                config_id=config_id,
+                host_c_oses=host_c_oses,
             )
         )
 
@@ -420,7 +458,7 @@ else:
 
 def reload_accounts_from_env_file() -> None:
     """从 .env 文件重新加载账号配置（动态重载，无需重启）"""
-    global ACCOUNTS, ACCOUNT_POOL
+    global ACCOUNTS, ACCOUNT_POOL, PROXY
     
     # 重新读取 .env 文件并更新环境变量
     lines = read_env_file()
@@ -430,9 +468,24 @@ def reload_accounts_from_env_file() -> None:
             continue
         key, value = line.split("=", 1)
         key = key.strip()
-        value = value.strip().strip('"').strip("'")
+        # 去掉首尾的引号（支持单引号和双引号）
+        value = value.strip()
+        if (value.startswith('"') and value.endswith('"')) or (value.startswith("'") and value.endswith("'")):
+            value = value[1:-1]
+        # 去除 config_id 中可能存在的 ?csesidx 后缀
+        if key.endswith("_CONFIG_ID") or key == "CONFIG_ID":
+            if '?csesidx' in value:
+                value = value.split('?csesidx')[0]
         # 更新环境变量
         os.environ[key] = value
+        # 如果更新了 PROXY，同步更新全局变量
+        if key == "PROXY":
+            PROXY_RAW = value.strip().strip('"').strip("'") if value else None
+            PROXY = PROXY_RAW if PROXY_RAW else None
+            if PROXY:
+                logger.info(f"🔄 代理配置已更新: {PROXY}")
+            else:
+                logger.info("🔄 代理配置已清除")
     
     # 重新加载账号
     ACCOUNTS = load_accounts_from_env()
@@ -456,7 +509,7 @@ async def create_google_session(account: Account) -> str:
         "createSessionRequest": {"session": {"name": "", "displayName": ""}},
     }
 
-    logger.debug(f"🌐 申请 Session... 账号={account.name}")
+    logger.info(f"🌐 申请 Session... 账号={account.name}, configId={account.config_id}")
     r = await http_client.post(
         "https://biz-discoveryengine.googleapis.com/v1alpha/locations/global/widgetCreateSession",
         headers=headers,
@@ -464,7 +517,7 @@ async def create_google_session(account: Account) -> str:
     )
     if r.status_code != 200:
         logger.error(
-            f"createSession 失败 [{account.name}]: {r.status_code} {r.text}"
+            f"createSession 失败 [{account.name}]: {r.status_code}, configId={account.config_id}, 响应={r.text}"
         )
         if r.status_code in (401, 403, 429):
             account.mark_quota_error(r.status_code, r.text)
@@ -1321,6 +1374,9 @@ def parse_accounts_from_env_lines(lines: List[Dict[str, str]]) -> List[Dict[str,
         key, value = line.split("=", 1)
         key = key.strip()
         value = value.strip().strip('"').strip("'")
+        # 去除 config_id 中可能存在的 ?csesidx 后缀
+        if key.endswith("_CONFIG_ID") and '?csesidx' in value:
+            value = value.split('?csesidx')[0]
         
         # 检查是否是账号配置
         if key.startswith("ACCOUNT") and key.endswith("_SECURE_C_SES"):
@@ -1356,6 +1412,9 @@ def parse_accounts_from_env_lines(lines: List[Dict[str, str]]) -> List[Dict[str,
         key, value = line.split("=", 1)
         key = key.strip()
         value = value.strip().strip('"').strip("'")
+        # 去除 config_id 中可能存在的 ?csesidx 后缀
+        if key == "CONFIG_ID" and '?csesidx' in value:
+            value = value.split('?csesidx')[0]
         if key in ["SECURE_C_SES", "CSESIDX", "CONFIG_ID", "HOST_C_OSES"]:
             old_account[key] = value
     
@@ -2109,6 +2168,412 @@ async def bulk_delete_accounts(
     return {
         "message": f"成功删除 {deleted_count} 个账号，索引已自动重新分配",
         "deleted_count": deleted_count
+    }
+
+
+# ---------- 保活策略管理接口 ----------
+class KeepAliveTaskRequest(BaseModel):
+    is_enabled: bool
+    schedule_time: str  # HH:MM 格式
+
+
+class KeepAliveTaskResponse(BaseModel):
+    id: int
+    is_enabled: bool
+    schedule_time: str
+    last_run_at: Optional[datetime]
+    last_status: Optional[str]
+    last_message: Optional[str]
+    created_at: datetime
+    updated_at: datetime
+
+
+class KeepAliveLogResponse(BaseModel):
+    id: int
+    task_id: int
+    started_at: datetime
+    finished_at: Optional[datetime]
+    status: str
+    message: Optional[str]
+    accounts_count: Optional[int]
+    success_count: Optional[int]
+    fail_count: Optional[int]
+
+
+@app.get("/admin/keep-alive/task", response_model=KeepAliveTaskResponse)
+async def get_keep_alive_task(
+    admin: Admin = Depends(get_current_admin),
+    db: Session = Depends(get_db)
+):
+    """获取保活任务配置"""
+    global current_keep_alive_process
+    
+    task = db.query(KeepAliveTask).first()
+    if not task:
+        # 创建默认任务
+        task = KeepAliveTask(
+            is_enabled=True,
+            schedule_time="00:00"
+        )
+        db.add(task)
+        db.commit()
+        db.refresh(task)
+    
+    # 检查实际进程状态，如果数据库显示"running"但进程不存在，更新状态
+    async with keep_alive_process_lock:
+        is_actually_running = current_keep_alive_process is not None and current_keep_alive_process.poll() is None
+    
+    # 如果数据库显示运行中，但实际没有进程，清理状态
+    if task.last_status == "running" and not is_actually_running:
+        # 检查是否有未完成的日志
+        running_log = db.query(KeepAliveLog).filter(
+            KeepAliveLog.status == "running"
+        ).order_by(KeepAliveLog.started_at.desc()).first()
+        
+        if running_log:
+            # 更新日志状态
+            running_log.status = "error"
+            running_log.finished_at = get_beijing_time()
+            running_log.message = "进程异常退出"
+            
+            # 更新所有运行中的账号日志
+            running_account_logs = db.query(KeepAliveAccountLog).filter(
+                KeepAliveAccountLog.task_log_id == running_log.id,
+                KeepAliveAccountLog.status == "running"
+            ).all()
+            for acc_log in running_account_logs:
+                acc_log.status = "error"
+                acc_log.finished_at = get_beijing_time()
+                acc_log.message = "进程异常退出"
+        
+        # 更新任务状态
+        task.last_status = "error" if running_log else task.last_status
+        task.last_message = "进程异常退出" if running_log else task.last_message
+        db.commit()
+    
+    return KeepAliveTaskResponse(
+        id=task.id,
+        is_enabled=task.is_enabled,
+        schedule_time=task.schedule_time,
+        last_run_at=task.last_run_at,
+        last_status=task.last_status,
+        last_message=task.last_message,
+        created_at=task.created_at,
+        updated_at=task.updated_at
+    )
+
+
+@app.put("/admin/keep-alive/task", response_model=KeepAliveTaskResponse)
+async def update_keep_alive_task(
+    req: KeepAliveTaskRequest,
+    admin: Admin = Depends(get_current_admin),
+    db: Session = Depends(get_db)
+):
+    """更新保活任务配置"""
+    # 验证时间格式
+    try:
+        hour, minute = map(int, req.schedule_time.split(":"))
+        if not (0 <= hour <= 23 and 0 <= minute <= 59):
+            raise ValueError("时间格式错误")
+    except (ValueError, AttributeError):
+        raise HTTPException(status_code=400, detail="时间格式错误，应为 HH:MM (24小时制)")
+    
+    task = db.query(KeepAliveTask).first()
+    if not task:
+        task = KeepAliveTask(
+            is_enabled=req.is_enabled,
+            schedule_time=req.schedule_time
+        )
+        db.add(task)
+    else:
+        task.is_enabled = req.is_enabled
+        task.schedule_time = req.schedule_time
+        task.updated_at = get_beijing_time()
+    
+    db.commit()
+    db.refresh(task)
+    
+    # 重新设置调度器
+    try:
+        scheduler.remove_job("keep_alive_task")
+    except Exception:
+        # 如果任务不存在，忽略错误
+        pass
+    
+    if task.is_enabled:
+        try:
+            hour, minute = map(int, task.schedule_time.split(":"))
+            scheduler.add_job(
+                execute_keep_alive_task,
+                trigger=CronTrigger(hour=hour, minute=minute, timezone=BEIJING_TZ),
+                id="keep_alive_task",
+                replace_existing=True
+            )
+            logger.info(f"✅ 保活任务已更新，每日 {task.schedule_time} (北京时间) 执行")
+        except Exception as e:
+            logger.error(f"❌ 设置保活任务调度器失败: {e}")
+            raise HTTPException(status_code=500, detail=f"设置调度器失败: {str(e)}")
+    else:
+        logger.info("ℹ️ 保活任务已禁用")
+    
+    return KeepAliveTaskResponse(
+        id=task.id,
+        is_enabled=task.is_enabled,
+        schedule_time=task.schedule_time,
+        last_run_at=task.last_run_at,
+        last_status=task.last_status,
+        last_message=task.last_message,
+        created_at=task.created_at,
+        updated_at=task.updated_at
+    )
+
+
+@app.post("/admin/keep-alive/execute")
+async def execute_keep_alive_manual(
+    admin: Admin = Depends(get_current_admin)
+):
+    """手动执行保活任务"""
+    global current_keep_alive_process
+    
+    async with keep_alive_process_lock:
+        if current_keep_alive_process is not None:
+            raise HTTPException(status_code=400, detail="保活任务正在执行中，请等待完成或先中断")
+    
+    logger.info(f"🔧 管理员 {admin.username} 手动触发保活任务")
+    # 在后台执行，不阻塞响应
+    asyncio.create_task(execute_keep_alive_task())
+    return {"message": "保活任务已开始执行"}
+
+
+@app.post("/admin/keep-alive/cancel")
+async def cancel_keep_alive_task(
+    admin: Admin = Depends(get_current_admin)
+):
+    """中断正在执行的保活任务"""
+    global current_keep_alive_process
+    
+    async with keep_alive_process_lock:
+        if current_keep_alive_process is None:
+            raise HTTPException(status_code=400, detail="没有正在执行的保活任务")
+        
+        try:
+            # 终止进程
+            current_keep_alive_process.terminate()
+            try:
+                # 等待5秒，如果还没结束就强制杀死
+                await asyncio.wait_for(
+                    asyncio.to_thread(current_keep_alive_process.wait),
+                    timeout=5
+                )
+            except asyncio.TimeoutError:
+                current_keep_alive_process.kill()
+            
+            # 更新日志状态
+            db = next(get_db())
+            try:
+                # 找到最新的运行中的日志
+                running_log = db.query(KeepAliveLog).filter(
+                    KeepAliveLog.status == "running"
+                ).order_by(KeepAliveLog.started_at.desc()).first()
+                
+                if running_log:
+                    running_log.status = "cancelled"
+                    running_log.finished_at = get_beijing_time()
+                    running_log.message = "任务被管理员中断"
+                    
+                    # 更新所有运行中的账号日志
+                    running_account_logs = db.query(KeepAliveAccountLog).filter(
+                        KeepAliveAccountLog.task_log_id == running_log.id,
+                        KeepAliveAccountLog.status == "running"
+                    ).all()
+                    for acc_log in running_account_logs:
+                        acc_log.status = "cancelled"
+                        acc_log.finished_at = get_beijing_time()
+                        acc_log.message = "任务被中断"
+                    
+                    # 更新任务状态
+                    task = db.query(KeepAliveTask).first()
+                    if task:
+                        task.last_status = "cancelled"
+                        task.last_message = "任务被管理员中断"
+                    
+                    db.commit()
+                
+            finally:
+                db.close()
+            
+            current_keep_alive_process = None
+            
+            # 如果保活任务已经更新了部分账号配置，重新加载账号配置
+            try:
+                reload_accounts_from_env_file()
+                logger.info("🔄 中断保活任务后已重新加载账号配置")
+            except Exception as e:
+                logger.error(f"❌ 重新加载账号配置失败: {e}")
+            
+            logger.info(f"🛑 管理员 {admin.username} 中断了保活任务")
+            return {"message": "保活任务已中断"}
+            
+        except Exception as e:
+            logger.error(f"❌ 中断保活任务失败: {e}")
+            raise HTTPException(status_code=500, detail=f"中断失败: {str(e)}")
+
+
+class KeepAliveAccountLogResponse(BaseModel):
+    id: int
+    task_log_id: int
+    account_name: str
+    account_email: Optional[str]
+    started_at: datetime
+    finished_at: Optional[datetime]
+    status: str
+    message: Optional[str]
+
+
+@app.get("/admin/keep-alive/logs", response_model=List[KeepAliveLogResponse])
+async def get_keep_alive_logs(
+    page: int = 1,
+    page_size: int = 20,
+    admin: Admin = Depends(get_current_admin),
+    db: Session = Depends(get_db)
+):
+    """获取保活任务执行日志"""
+    offset = (page - 1) * page_size
+    logs = db.query(KeepAliveLog).order_by(
+        KeepAliveLog.started_at.desc()
+    ).offset(offset).limit(page_size).all()
+    
+    return [
+        KeepAliveLogResponse(
+            id=log.id,
+            task_id=log.task_id,
+            started_at=log.started_at,
+            finished_at=log.finished_at,
+            status=log.status,
+            message=log.message,
+            accounts_count=log.accounts_count,
+            success_count=log.success_count,
+            fail_count=log.fail_count
+        )
+        for log in logs
+    ]
+
+
+@app.get("/admin/keep-alive/logs/{log_id}/accounts", response_model=List[KeepAliveAccountLogResponse])
+async def get_keep_alive_account_logs(
+    log_id: int,
+    admin: Admin = Depends(get_current_admin),
+    db: Session = Depends(get_db)
+):
+    """获取指定任务日志的账号级别日志"""
+    # 验证任务日志是否存在
+    task_log = db.query(KeepAliveLog).filter(KeepAliveLog.id == log_id).first()
+    if not task_log:
+        raise HTTPException(status_code=404, detail="任务日志不存在")
+    
+    account_logs = db.query(KeepAliveAccountLog).filter(
+        KeepAliveAccountLog.task_log_id == log_id
+    ).order_by(KeepAliveAccountLog.started_at.asc()).all()
+    
+    return [
+        KeepAliveAccountLogResponse(
+            id=log.id,
+            task_log_id=log.task_log_id,
+            account_name=log.account_name,
+            account_email=log.account_email,
+            started_at=log.started_at,
+            finished_at=log.finished_at,
+            status=log.status,
+            message=log.message
+        )
+        for log in account_logs
+    ]
+
+
+@app.delete("/admin/keep-alive/logs/{log_id}")
+async def delete_keep_alive_log(
+    log_id: int,
+    admin: Admin = Depends(get_current_admin),
+    db: Session = Depends(get_db)
+):
+    """删除指定的保活任务日志"""
+    # 验证任务日志是否存在
+    task_log = db.query(KeepAliveLog).filter(KeepAliveLog.id == log_id).first()
+    if not task_log:
+        raise HTTPException(status_code=404, detail="任务日志不存在")
+    
+    # 删除关联的账号级别日志
+    db.query(KeepAliveAccountLog).filter(
+        KeepAliveAccountLog.task_log_id == log_id
+    ).delete()
+    
+    # 删除任务日志
+    db.delete(task_log)
+    db.commit()
+    
+    logger.info(f"🗑️ 管理员 {admin.username} 删除了保活任务日志 {log_id}")
+    return {"message": "日志已删除"}
+
+
+@app.post("/admin/accounts/reload")
+async def reload_accounts(
+    admin: Admin = Depends(get_current_admin)
+):
+    """手动重新加载账号配置"""
+    try:
+        reload_accounts_from_env_file()
+        logger.info(f"🔄 管理员 {admin.username} 手动重新加载了账号配置")
+        return {"message": "账号配置已重新加载"}
+    except Exception as e:
+        logger.error(f"❌ 重新加载账号配置失败: {e}")
+        raise HTTPException(status_code=500, detail=f"重新加载失败: {str(e)}")
+
+
+@app.post("/admin/keep-alive/logs/bulk-delete")
+async def bulk_delete_keep_alive_logs(
+    log_ids: List[int],
+    admin: Admin = Depends(get_current_admin),
+    db: Session = Depends(get_db)
+):
+    """批量删除保活任务日志"""
+    if not log_ids:
+        raise HTTPException(status_code=400, detail="请选择要删除的日志")
+    
+    # 验证所有日志是否存在
+    task_logs = db.query(KeepAliveLog).filter(
+        KeepAliveLog.id.in_(log_ids)
+    ).all()
+    
+    if len(task_logs) != len(log_ids):
+        raise HTTPException(status_code=404, detail="部分日志不存在")
+    
+    # 删除关联的账号级别日志
+    db.query(KeepAliveAccountLog).filter(
+        KeepAliveAccountLog.task_log_id.in_(log_ids)
+    ).delete(synchronize_session=False)
+    
+    # 删除任务日志
+    for task_log in task_logs:
+        db.delete(task_log)
+    
+    db.commit()
+    
+    logger.info(f"🗑️ 管理员 {admin.username} 批量删除了 {len(log_ids)} 条保活任务日志")
+    return {"message": f"已删除 {len(log_ids)} 条日志"}
+
+
+@app.get("/admin/keep-alive/status")
+async def get_keep_alive_status(
+    admin: Admin = Depends(get_current_admin)
+):
+    """获取保活任务当前状态（是否正在运行）"""
+    global current_keep_alive_process
+    
+    async with keep_alive_process_lock:
+        is_running = current_keep_alive_process is not None and current_keep_alive_process.poll() is None
+    
+    return {
+        "is_running": is_running
     }
 
 
@@ -2913,6 +3378,351 @@ async def stream_chat_generator(
         yield "data: [DONE]\n\n"
 
 
+# ---------- 保活任务调度器 ----------
+scheduler = AsyncIOScheduler(timezone=BEIJING_TZ)
+
+# 当前运行的保活任务进程（用于中断）
+current_keep_alive_process: Optional[subprocess.Popen] = None
+keep_alive_process_lock = asyncio.Lock()
+
+
+async def execute_keep_alive_task():
+    """执行保活任务"""
+    global current_keep_alive_process
+    
+    db = next(get_db())
+    log_entry = None
+    try:
+        # 获取保活任务配置
+        task = db.query(KeepAliveTask).first()
+        if not task:
+            # 如果没有任务配置，创建一个默认的
+            task = KeepAliveTask(
+                is_enabled=True,
+                schedule_time="00:00"
+            )
+            db.add(task)
+            db.commit()
+            db.refresh(task)
+        
+        if not task.is_enabled:
+            logger.info("保活任务已禁用，跳过执行")
+            return
+        
+        logger.info("🔄 开始执行保活任务...")
+        
+        # 在开始执行前，先重新加载一次账号配置（以防.env文件已被部分更新）
+        try:
+            reload_accounts_from_env_file()
+            logger.info("🔄 保活任务开始前已重新加载账号配置")
+        except Exception as e:
+            logger.warning(f"⚠️ 保活任务开始前重新加载账号配置失败: {e}")
+        
+        # 创建执行日志
+        log_entry = KeepAliveLog(
+            task_id=task.id,
+            started_at=get_beijing_time(),
+            status="running"
+        )
+        db.add(log_entry)
+        db.commit()
+        db.refresh(log_entry)
+        
+        # 更新任务状态
+        task.last_run_at = get_beijing_time()
+        task.last_status = "running"
+        task.last_message = "执行中..."
+        db.commit()
+        
+        try:
+            # 执行 keep_alive_env.py 脚本（从 .env 文件读取账号）
+            script_path = os.path.join(BASE_DIR, "keep_alive_env.py")
+            if not os.path.exists(script_path):
+                raise FileNotFoundError(f"保活脚本不存在: {script_path}")
+            
+            # 使用 subprocess.Popen 执行脚本，以便可以中断
+            async with keep_alive_process_lock:
+                current_keep_alive_process = subprocess.Popen(
+                    [sys.executable, "-u", script_path],  # -u 参数确保无缓冲输出
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,  # 将 stderr 合并到 stdout，确保错误也能被读取
+                    text=True,
+                    cwd=BASE_DIR,
+                    bufsize=0  # 无缓冲
+                )
+            
+            # 实时读取输出并解析账号日志
+            output_lines = []
+            account_logs_dict = {}  # 存储账号级别的日志 {account_name: account_log}
+            account_index_to_log = {}  # 存储账号索引到日志的映射 {account_index: account_log}
+            
+            # 在后台读取输出
+            async def read_output():
+                nonlocal account_logs_dict, account_index_to_log
+                try:
+                    while True:
+                        # 检查进程是否还在运行
+                        if current_keep_alive_process.poll() is not None:
+                            # 进程已结束，读取剩余输出
+                            remaining = await asyncio.to_thread(
+                                lambda: current_keep_alive_process.stdout.read()
+                            )
+                            if remaining:
+                                for line in remaining.strip().split('\n'):
+                                    if line.strip():
+                                        output_lines.append(line.strip())
+                                        logger.info(f"保活输出: {line.strip()}")
+                            break
+                        
+                        # 读取一行输出
+                        line = await asyncio.to_thread(
+                            lambda: current_keep_alive_process.stdout.readline()
+                        )
+                        if not line:
+                            await asyncio.sleep(0.1)  # 短暂等待
+                            continue
+                        
+                        line = line.strip()
+                        if line:
+                            output_lines.append(line)
+                            logger.info(f"保活输出: {line}")
+                            
+                            # 解析账号级别的日志：格式如 "[1/3] 开始更新账号: user@example.com (user@example.com) - 2024-01-01 12:00:00"
+                            # 或 "[1/3] 更新成功账号: user@example.com (user@example.com) - 2024-01-01 12:00:00 (耗时: 1分30秒)"
+                            account_match = re.search(r'\[(\d+)/(\d+)\]\s*(开始更新|更新成功|更新失败).*?账号:\s*([^(]+)(?:\(([^)]+)\))?', line)
+                            if account_match:
+                                account_index = account_match.group(1)
+                                total_accounts = account_match.group(2)
+                                action = account_match.group(3)
+                                account_name = account_match.group(4).strip()
+                                account_email = account_match.group(5).strip() if account_match.group(5) else extract_email_from_name(account_name)
+                                
+                                # 如果账号日志已存在，更新状态；否则创建新日志
+                                if account_name in account_logs_dict:
+                                    account_log = account_logs_dict[account_name]
+                                    if "成功" in action:
+                                        account_log.status = "success"
+                                    elif "失败" in action:
+                                        account_log.status = "error"
+                                    account_log.finished_at = get_beijing_time()
+                                    # 累积所有日志行到 message 中
+                                    if account_log.message:
+                                        account_log.message = account_log.message + "\n" + line
+                                    else:
+                                        account_log.message = line
+                                else:
+                                    # 创建账号日志
+                                    account_log = KeepAliveAccountLog(
+                                        task_log_id=log_entry.id,
+                                        account_name=account_name,
+                                        account_email=account_email,
+                                        started_at=get_beijing_time(),
+                                        status="running" if "开始" in action else ("success" if "成功" in action else "error"),
+                                        message=line
+                                    )
+                                    account_logs_dict[account_name] = account_log
+                                    account_index_to_log[int(account_index)] = account_log  # 保存索引映射
+                                    db.add(account_log)
+                                
+                                db.commit()
+                            else:
+                                # 如果不是账号级别的日志，尝试关联到对应的账号日志
+                                # 查找包含账号索引的行，如 "[1/21] 需要验证码" 或 "[1/21] ✅ 找到验证码"
+                                index_match = re.search(r'\[(\d+)/(\d+)\]', line)
+                                if index_match:
+                                    account_index = int(index_match.group(1))
+                                    # 通过账号索引找到对应的账号日志
+                                    if account_index in account_index_to_log:
+                                        account_log = account_index_to_log[account_index]
+                                        # 累积日志到 message 中
+                                        if account_log.message:
+                                            account_log.message = account_log.message + "\n" + line
+                                        else:
+                                            account_log.message = line
+                                        db.commit()
+                                    elif account_logs_dict:
+                                        # 如果索引映射中没有，使用最后创建的账号日志（向后兼容）
+                                        last_account_log = max(account_logs_dict.values(), key=lambda x: x.started_at)
+                                        if last_account_log:
+                                            if last_account_log.message:
+                                                last_account_log.message = last_account_log.message + "\n" + line
+                                            else:
+                                                last_account_log.message = line
+                                            db.commit()
+                except Exception as e:
+                    logger.error(f"读取保活输出异常: {e}")
+            
+            # 启动后台读取任务
+            read_task = asyncio.create_task(read_output())
+            
+            # 等待进程完成或中断
+            try:
+                returncode = await asyncio.wait_for(
+                    asyncio.to_thread(current_keep_alive_process.wait),
+                    timeout=3600  # 1小时超时
+                )
+            except asyncio.TimeoutError:
+                # 超时，终止进程
+                current_keep_alive_process.terminate()
+                try:
+                    await asyncio.wait_for(
+                        asyncio.to_thread(current_keep_alive_process.wait),
+                        timeout=5
+                    )
+                except asyncio.TimeoutError:
+                    current_keep_alive_process.kill()
+                returncode = -1
+                status = "error"
+                message = "执行超时（超过1小时）"
+            except Exception as e:
+                returncode = -1
+                status = "error"
+                message = f"执行异常: {str(e)[:200]}"
+            finally:
+                # 等待读取任务完成
+                try:
+                    await asyncio.wait_for(read_task, timeout=2)
+                except (asyncio.TimeoutError, asyncio.CancelledError):
+                    read_task.cancel()
+                    try:
+                        await read_task
+                    except:
+                        pass
+            
+            # 读取剩余输出（由于 stderr 已合并到 stdout，这里只需要读取 stdout）
+            stderr_content = ""
+            try:
+                # 由于 stderr 已合并到 stdout，这里不再单独读取 stderr
+                # 所有输出（包括错误）都已经在 read_output 中读取了
+                pass
+            except Exception as e:
+                logger.error(f"读取进程输出失败: {e}")
+                stderr_content = str(e)
+            
+            output = '\n'.join(output_lines)
+            
+            # 提取汇总信息（包含 "总账号数"、"成功"、"失败"、"成功率"、"总耗时" 等）
+            summary_lines = []
+            for line in output_lines:
+                if any(keyword in line for keyword in ["总账号数", "成功:", "失败:", "成功率", "总耗时", "更新统计", "=" * 10]):
+                    summary_lines.append(line)
+            summary_output = '\n'.join(summary_lines) if summary_lines else None
+            
+            # 解析统计信息
+            success_match = re.search(r'成功:\s*(\d+)', output)
+            fail_match = re.search(r'失败:\s*(\d+)', output)
+            total_match = re.search(r'总账号数:\s*(\d+)', output)
+            
+            accounts_count = int(total_match.group(1)) if total_match else len(account_logs_dict)
+            success_count = int(success_match.group(1)) if success_match else len([log for log in account_logs_dict.values() if log.status == "success"])
+            fail_count = int(fail_match.group(1)) if fail_match else len([log for log in account_logs_dict.values() if log.status == "error"])
+            
+            if returncode == 0:
+                status = "success"
+                message = f"成功更新 {success_count}/{accounts_count} 个账号"
+                # 如果有汇总信息，添加到 message 中
+                if summary_output:
+                    message = message + "\n\n" + summary_output
+            else:
+                status = "error"
+                error_msg = stderr_content[:200] if stderr_content else output[-200:] if output else '未知错误'
+                message = f"执行失败: {error_msg}"
+                # 如果有汇总信息，也添加到 message 中
+                if summary_output:
+                    message = message + "\n\n" + summary_output
+            
+            # 更新所有账号日志的结束时间
+            for acc_log in account_logs_dict.values():
+                if acc_log.finished_at is None:
+                    acc_log.finished_at = get_beijing_time()
+                    if acc_log.status == "running":
+                        acc_log.status = "error"
+                        acc_log.message = (acc_log.message or "") + " (进程异常结束)"
+                    db.commit()
+            
+            # 更新日志
+            log_entry.finished_at = get_beijing_time()
+            log_entry.status = status
+            log_entry.message = message
+            log_entry.accounts_count = accounts_count
+            log_entry.success_count = success_count
+            log_entry.fail_count = fail_count
+            
+            # 更新任务状态
+            task.last_status = status
+            task.last_message = message
+            task.updated_at = get_beijing_time()
+            
+            db.commit()
+            db.close()
+            
+            # 重新加载账号配置，确保使用最新的 csesidx 等配置
+            try:
+                reload_accounts_from_env_file()
+                logger.info("🔄 保活任务完成后已重新加载账号配置")
+            except Exception as e:
+                logger.error(f"❌ 重新加载账号配置失败: {e}")
+            
+            logger.info(f"✅ 保活任务执行完成: {message}")
+            
+        except Exception as e:
+            status = "error"
+            message = f"执行异常: {str(e)[:200]}"
+            if log_entry:
+                log_entry.finished_at = get_beijing_time()
+                log_entry.status = status
+                log_entry.message = message
+            task.last_status = status
+            task.last_message = message
+            db.commit()
+            logger.error(f"❌ 保活任务执行异常: {e}")
+        finally:
+            async with keep_alive_process_lock:
+                current_keep_alive_process = None
+            
+    except Exception as e:
+        logger.error(f"❌ 保活任务执行失败: {e}")
+    finally:
+        db.close()
+
+
+def setup_keep_alive_scheduler():
+    """设置保活任务调度器"""
+    db = next(get_db())
+    try:
+        # 获取或创建保活任务配置
+        task = db.query(KeepAliveTask).first()
+        if not task:
+            task = KeepAliveTask(
+                is_enabled=True,
+                schedule_time="00:00"
+            )
+            db.add(task)
+            db.commit()
+            db.refresh(task)
+        
+        # 如果任务已启用，添加定时任务
+        if task.is_enabled:
+            # 解析时间（HH:MM格式）
+            hour, minute = map(int, task.schedule_time.split(":"))
+            
+            # 添加每日定时任务（北京时间）
+            scheduler.add_job(
+                execute_keep_alive_task,
+                trigger=CronTrigger(hour=hour, minute=minute, timezone=BEIJING_TZ),
+                id="keep_alive_task",
+                replace_existing=True
+            )
+            logger.info(f"✅ 保活任务已设置，每日 {task.schedule_time} (北京时间) 执行")
+        else:
+            logger.info("ℹ️ 保活任务已禁用")
+            
+    except Exception as e:
+        logger.error(f"❌ 设置保活任务调度器失败: {e}")
+    finally:
+        db.close()
+
+
 @app.on_event("startup")
 async def _startup_event() -> None:
     """启动时初始化数据库和管理员账号"""
@@ -2920,13 +3730,45 @@ async def _startup_event() -> None:
     db = next(get_db())
     try:
         init_admin(db)
+        
+        # 清理遗留的"running"状态（可能是上次异常退出导致的）
+        running_logs = db.query(KeepAliveLog).filter(
+            KeepAliveLog.status == "running"
+        ).all()
+        for log in running_logs:
+            log.status = "error"
+            log.finished_at = get_beijing_time()
+            log.message = "服务重启，进程已终止"
+            
+            # 更新所有运行中的账号日志
+            running_account_logs = db.query(KeepAliveAccountLog).filter(
+                KeepAliveAccountLog.task_log_id == log.id,
+                KeepAliveAccountLog.status == "running"
+            ).all()
+            for acc_log in running_account_logs:
+                acc_log.status = "error"
+                acc_log.finished_at = get_beijing_time()
+                acc_log.message = "服务重启，进程已终止"
+        
+        # 更新任务状态
+        task = db.query(KeepAliveTask).first()
+        if task and task.last_status == "running":
+            task.last_status = "error"
+            task.last_message = "服务重启，进程已终止"
+        
+        db.commit()
     finally:
         db.close()
+    
+    # 启动定时任务调度器
+    scheduler.start()
+    setup_keep_alive_scheduler()
 
 
 @app.on_event("shutdown")
 async def _shutdown_event() -> None:
     try:
+        scheduler.shutdown()
         await http_client.aclose()
     except Exception:  # noqa: BLE001
         pass

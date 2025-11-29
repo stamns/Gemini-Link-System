@@ -151,6 +151,7 @@
                 </h1>
                 <div style="display: flex; gap: 1rem;">
                     <a href="/static/dashboard.html" class="btn-secondary">返回密钥管理</a>
+                    <button id="keepAliveBtn" class="btn-secondary">保活</button>
                     <button id="logoutBtn" class="btn-secondary">退出登录</button>
                 </div>
             </div>
@@ -276,6 +277,26 @@
         </div>
     </div>
 
+    <!-- 保活策略模态框 -->
+    <div id="keepAliveModal" class="modal">
+        <div class="modal-content" style="max-width: 1400px; width: 95vw; height: 90vh; display: flex; flex-direction: column;">
+            <div class="modal-header">
+                <h2 style="display: flex; align-items: center; gap: 8px;">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <circle cx="12" cy="12" r="10"></circle>
+                        <polyline points="12 6 12 12 16 14"></polyline>
+                    </svg>
+                    保活策略
+                </h2>
+                <button class="modal-close" onclick="closeKeepAliveModal()">&times;</button>
+            </div>
+            <div class="modal-body" style="flex: 1; overflow: hidden; padding: 0;">
+                <iframe id="keepAliveIframe" src="/static/keepalive.html" style="width: 100%; height: 100%; border: none;"></iframe>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/app.js"></script>
     <script>
         const token = localStorage.getItem('token');
         if (!token) {
@@ -863,6 +884,22 @@ ${account.host_c_oses ? `ACCOUNT${account.index}_HOST_C_OSES="${account.host_c_o
 
         // 初始化：加载账号列表
         loadAccounts();
+
+        // ========== 保活策略管理 ==========
+        document.getElementById('keepAliveBtn').addEventListener('click', () => {
+            document.getElementById('keepAliveModal').classList.add('active');
+        });
+
+        window.closeKeepAliveModal = function() {
+            document.getElementById('keepAliveModal').classList.remove('active');
+        };
+        
+        // 点击模态框外部关闭
+        document.getElementById('keepAliveModal').addEventListener('click', (e) => {
+            if (e.target.id === 'keepAliveModal') {
+                closeKeepAliveModal();
+            }
+        });
     </script>
 </body>
 
