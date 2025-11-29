@@ -182,7 +182,7 @@ manager = ConnectionManager()
 
 # ---------- HTTP 客户端 ----------
 http_client = httpx.AsyncClient(
-    proxies=PROXY,
+    proxy=PROXY,
     verify=False,
     http2=False,
     timeout=httpx.Timeout(TIMEOUT_SECONDS, connect=60.0),
@@ -1197,6 +1197,19 @@ async def get_api_key_stats(
 
 
 # ---------- 账号管理接口 ----------
+def extract_email_from_name(name: str) -> Optional[str]:
+    """从账号名称中提取邮箱地址"""
+    if not name:
+        return None
+    
+    # 邮箱正则表达式
+    email_pattern = r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b'
+    match = re.search(email_pattern, name)
+    if match:
+        return match.group(0).lower()  # 转换为小写以便比较
+    return None
+
+
 def read_env_file() -> List[Dict[str, str]]:
     """读取 .env 文件，返回所有行（包括注释和空行）"""
     env_path = ".env"
@@ -1225,6 +1238,73 @@ def write_env_file(lines: List[Dict[str, str]]) -> None:
     except Exception as e:
         logger.error(f"写入 .env 文件失败: {e}")
         raise HTTPException(status_code=500, detail=f"写入 .env 文件失败: {e}")
+
+
+def reindex_accounts_in_file(lines: List[Dict[str, str]]) -> List[Dict[str, str]]:
+    """重新分配账号索引，使索引从1开始连续"""
+    # 解析现有账号
+    accounts = parse_accounts_from_env_lines(lines)
+    
+    # 过滤掉旧格式账号（index=0），只保留有效的账号
+    valid_accounts = [acc for acc in accounts if acc["index"] > 0]
+    
+    # 如果没有有效账号，直接返回
+    if not valid_accounts:
+        return lines
+    
+    # 按索引排序
+    valid_accounts.sort(key=lambda x: x["index"])
+    
+    # 创建索引映射：旧索引 -> 新索引（从1开始连续编号）
+    index_mapping = {}
+    for new_idx, acc in enumerate(valid_accounts, start=1):
+        old_idx = acc["index"]
+        index_mapping[old_idx] = new_idx
+    
+    # 重新构建文件内容
+    new_lines = []
+    i = 0
+    
+    while i < len(lines):
+        line_data = lines[i]
+        line = line_data["raw"]
+        
+        # 检查是否是账号相关的行
+        if "ACCOUNT" in line and "_" in line:
+            # 尝试匹配 ACCOUNT{数字}_ 格式
+            match = re.match(r'ACCOUNT(\d+)_', line)
+            if match:
+                old_idx = int(match.group(1))
+                if old_idx in index_mapping:
+                    new_idx = index_mapping[old_idx]
+                    # 替换索引
+                    new_line = line.replace(f"ACCOUNT{old_idx}_", f"ACCOUNT{new_idx}_")
+                    new_lines.append({"raw": new_line, "type": "line"})
+                    i += 1
+                    continue
+        
+        # 检查是否是账号注释行
+        if line.strip().startswith("#") and "Account" in line:
+            # 尝试匹配 # Account {数字}: 格式
+            match = re.match(r'#\s*Account\s+(\d+):', line, re.IGNORECASE)
+            if match:
+                old_idx = int(match.group(1))
+                if old_idx in index_mapping:
+                    new_idx = index_mapping[old_idx]
+                    # 获取账号名称
+                    name_match = re.search(r':\s*([^@]+)', line)
+                    name = name_match.group(1).strip() if name_match else f"account-{new_idx}"
+                    # 替换注释
+                    new_line = f"# Account {new_idx}: {name}@{new_idx}"
+                    new_lines.append({"raw": new_line, "type": "comment"})
+                    i += 1
+                    continue
+        
+        # 其他行保持不变
+        new_lines.append(line_data)
+        i += 1
+    
+    return new_lines
 
 
 def parse_accounts_from_env_lines(lines: List[Dict[str, str]]) -> List[Dict[str, Any]]:
@@ -1359,35 +1439,19 @@ async def create_account(
     req: AccountRequest,
     admin: Admin = Depends(get_current_admin)
 ):
-    """创建新账号（基于邮箱去重）"""
+    """创建新账号"""
     lines = read_env_file()
     accounts = parse_accounts_from_env_lines(lines)
     
-    # 提取当前账号的邮箱
-    account_data = {
-        "name": req.name,
-        "secure_c_ses": req.secure_c_ses,
-        "csesidx": req.csesidx,
-        "config_id": req.config_id,
-        "host_c_oses": req.host_c_oses or ""
-    }
-    new_email = extract_email_from_account(account_data)
-    
     # 邮箱去重检查
+    new_email = extract_email_from_name(req.name)
     if new_email:
         for acc in accounts:
-            existing_account_data = {
-                "name": acc.get("name", ""),
-                "secure_c_ses": acc.get("secure_c_ses", ""),
-                "csesidx": acc.get("csesidx", ""),
-                "config_id": acc.get("config_id", ""),
-                "host_c_oses": acc.get("host_c_oses", "")
-            }
-            existing_email = extract_email_from_account(existing_account_data)
+            existing_email = extract_email_from_name(acc["name"])
             if existing_email and existing_email == new_email:
                 raise HTTPException(
                     status_code=400,
-                    detail=f"邮箱 {new_email} 已存在，不能重复添加"
+                    detail=f"邮箱 {new_email} 已存在于账号 {acc['name']} 中"
                 )
     
     # 找到下一个可用的索引
@@ -1432,32 +1496,10 @@ class BulkAccountRequest(BaseModel):
     text: str  # 原始文本，从中提取账号信息
 
 
-
-def extract_email_from_account(account_data: Dict[str, str]) -> Optional[str]:
-    """
-    从账号信息中提取邮箱
-    优先从 EMAIL 字段提取，如果没有则从 NAME 字段中提取（如果 NAME 是邮箱格式）
-    """
-    # 先尝试从 EMAIL 字段提取
-    email = account_data.get('email') or account_data.get('EMAIL')
-    if email:
-        return email.strip().lower()
-    
-    # 如果 NAME 字段看起来像邮箱，使用它
-    name = account_data.get('name') or account_data.get('NAME')
-    if name:
-        name = name.strip()
-        # 简单的邮箱格式检查：包含 @ 符号
-        if '@' in name and '.' in name.split('@')[-1]:
-            return name.lower()
-    
-    return None
-
-
 def extract_accounts_from_text(text: str) -> List[Dict[str, str]]:
     """
     从文本中模糊匹配提取账号信息
-    查找 NAME、EMAIL、SECURE_C_SES、CSESIDX、CONFIG_ID、HOST_C_OSES 字段
+    查找 NAME、SECURE_C_SES、CSESIDX、CONFIG_ID、HOST_C_OSES 字段
     """
     accounts = []
     lines = text.split('\n')
@@ -1498,13 +1540,6 @@ def extract_accounts_from_text(text: str) -> List[Dict[str, str]]:
             continue
         
         # 尝试匹配各个字段
-
-        # EMAIL（优先）
-        value = extract_value(line, r'(?:EMAIL|email)')
-        if value:
-            current_account['email'] = value
-            continue
-        
         # NAME
         value = extract_value(line, r'(?:NAME|name)')
         if value:
@@ -1537,9 +1572,7 @@ def extract_accounts_from_text(text: str) -> List[Dict[str, str]]:
         
         # 也支持 ACCOUNT1_NAME="value" 这种格式
         account_match = re.match(
-
-            r'ACCOUNT\d+_(NAME|EMAIL|SECURE_C_SES|CSESIDX|CONFIG_ID|HOST_C_OSES)\s*=\s*["\']?([^"\']+)["\']?',
-
+            r'ACCOUNT\d+_(NAME|SECURE_C_SES|CSESIDX|CONFIG_ID|HOST_C_OSES)\s*=\s*["\']?([^"\']+)["\']?',
             line,
             re.IGNORECASE
         )
@@ -1548,10 +1581,6 @@ def extract_accounts_from_text(text: str) -> List[Dict[str, str]]:
             value = account_match.group(2).strip()
             if key == 'name':
                 current_account['name'] = value
-
-            elif key == 'email':
-                current_account['email'] = value
-
             elif key == 'secure_c_ses':
                 current_account['secure_c_ses'] = value
             elif key == 'csesidx':
@@ -1571,12 +1600,6 @@ def extract_accounts_from_text(text: str) -> List[Dict[str, str]]:
         blocks = re.split(r'\n\s*\n+', text)
         for block in blocks:
             account = {}
-
-            # EMAIL
-            value = extract_value(block, r'(?:EMAIL|email)')
-            if value:
-                account['email'] = value
-
             # NAME
             value = extract_value(block, r'(?:NAME|name)')
             if value:
@@ -1621,18 +1644,13 @@ async def create_accounts_bulk(
     lines = read_env_file()
     accounts = parse_accounts_from_env_lines(lines)
     
-
-    # 获取已存在账号的邮箱集合（用于去重）
+    # 获取已存在的账号标识（用于去重）
+    existing_config_ids = {acc["config_id"] for acc in accounts}
+    existing_names = {acc["name"] for acc in accounts}
+    # 提取已存在账号的邮箱集合（用于邮箱去重）
     existing_emails = set()
     for acc in accounts:
-        account_data = {
-            "name": acc.get("name", ""),
-            "secure_c_ses": acc.get("secure_c_ses", ""),
-            "csesidx": acc.get("csesidx", ""),
-            "config_id": acc.get("config_id", ""),
-            "host_c_oses": acc.get("host_c_oses", "")
-        }
-        email = extract_email_from_account(account_data)
+        email = extract_email_from_name(acc["name"])
         if email:
             existing_emails.add(email)
     
@@ -1644,9 +1662,8 @@ async def create_accounts_bulk(
     
     created_accounts = []
     skipped_accounts = []
-
+    seen_in_batch = set()  # 用于批量添加内部的去重（CONFIG_ID）
     seen_emails_in_batch = set()  # 用于批量添加内部的邮箱去重
-
     
     new_lines = []
     
@@ -1666,40 +1683,59 @@ async def create_accounts_bulk(
             })
             continue
         
-<<<<<<< HEAD
-        # 提取邮箱
-        current_account_data = {
-            "name": name,
-            "email": acc_data.get('email', '').strip(),
-            "secure_c_ses": secure_c_ses,
-            "csesidx": csesidx,
-            "config_id": config_id,
-            "host_c_oses": host_c_oses
-        }
-        email = extract_email_from_account(current_account_data)
+        # 去重检查1：检查是否与已存在的账号重复（使用 CONFIG_ID）
+        if config_id in existing_config_ids:
+            skipped_accounts.append({
+                "name": name,
+                "reason": "CONFIG_ID 已存在"
+            })
+            continue
         
-        # 如果没有邮箱，跳过去重检查（允许添加）
-        if not email:
-            # 没有邮箱，直接添加
-            pass
-        else:
-            # 去重检查1：检查是否与已存在的账号邮箱重复
+        # 去重检查2：检查是否与已存在的账号名称重复
+        if name in existing_names:
+            skipped_accounts.append({
+                "name": name,
+                "reason": "账号名称已存在"
+            })
+            continue
+        
+        # 去重检查3：邮箱去重 - 检查是否与已存在的账号邮箱重复
+        email = extract_email_from_name(name)
+        if email:
             if email in existing_emails:
                 skipped_accounts.append({
                     "name": name,
                     "reason": f"邮箱 {email} 已存在"
                 })
                 continue
-            
-            # 去重检查2：检查批量添加的账号之间邮箱是否重复
-            if email in seen_emails_in_batch:
-                skipped_accounts.append({
-                    "name": name,
-                    "reason": f"批量添加中邮箱 {email} 重复"
-                })
-                continue
-            
-            # 添加到已见邮箱集合
+        
+        # 去重检查4：检查批量添加的账号之间是否重复（使用 CONFIG_ID）
+        if config_id in seen_in_batch:
+            skipped_accounts.append({
+                "name": name,
+                "reason": "批量添加中 CONFIG_ID 重复"
+            })
+            continue
+        
+        # 去重检查5：检查批量添加的账号名称是否重复
+        if name in {acc["name"] for acc in created_accounts}:
+            skipped_accounts.append({
+                "name": name,
+                "reason": "批量添加中账号名称重复"
+            })
+            continue
+        
+        # 去重检查6：批量添加中的邮箱去重
+        if email and email in seen_emails_in_batch:
+            skipped_accounts.append({
+                "name": name,
+                "reason": f"批量添加中邮箱 {email} 重复"
+            })
+            continue
+        
+        # 通过所有去重检查，添加到待创建列表
+        seen_in_batch.add(config_id)
+        if email:
             seen_emails_in_batch.add(email)
             existing_emails.add(email)  # 更新已存在邮箱集合，避免后续重复
         
@@ -1717,6 +1753,10 @@ async def create_accounts_bulk(
             "index": next_index,
             "name": name
         })
+        
+        # 更新已存在的集合（避免后续重复）
+        existing_config_ids.add(config_id)
+        existing_names.add(name)
         
         next_index += 1
         # 确保索引不冲突
@@ -1754,6 +1794,19 @@ async def update_account(
     account_exists = any(acc["index"] == account_index for acc in accounts)
     if not account_exists:
         raise HTTPException(status_code=404, detail="账号不存在")
+    
+    # 邮箱去重检查（排除当前账号）
+    new_email = extract_email_from_name(req.name)
+    if new_email:
+        for acc in accounts:
+            if acc["index"] == account_index:
+                continue  # 跳过当前账号
+            existing_email = extract_email_from_name(acc["name"])
+            if existing_email and existing_email == new_email:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"邮箱 {new_email} 已存在于账号 {acc['name']} 中"
+                )
     
     # 处理旧格式账号（index=0），转换为新格式
     if account_index == 0:
@@ -1962,14 +2015,17 @@ async def delete_account(
     else:
         new_lines = lines
     
+    # 重新分配索引
+    new_lines = reindex_accounts_in_file(new_lines)
+    
     write_env_file(new_lines)
     
     # 动态重新加载账号配置
     reload_accounts_from_env_file()
     
-    logger.info(f"✅ 管理员 {admin.username} 删除了账号 (索引: {account_index})")
+    logger.info(f"✅ 管理员 {admin.username} 删除了账号 (索引: {account_index})，已自动重新分配索引")
     
-    return {"message": "账号已删除"}
+    return {"message": "账号已删除，索引已自动重新分配"}
 
 
 class BulkDeleteAccountRequest(BaseModel):
@@ -2043,13 +2099,15 @@ async def bulk_delete_accounts(
             deleted_count += 1
     
     if deleted_count > 0:
+        # 重新分配索引
+        lines = reindex_accounts_in_file(lines)
         write_env_file(lines)
         # 动态重新加载账号配置
         reload_accounts_from_env_file()
-        logger.info(f"✅ 管理员 {admin.username} 批量删除了 {deleted_count} 个账号 (索引: {req.indices})")
+        logger.info(f"✅ 管理员 {admin.username} 批量删除了 {deleted_count} 个账号 (索引: {req.indices})，已自动重新分配索引")
     
     return {
-        "message": f"成功删除 {deleted_count} 个账号",
+        "message": f"成功删除 {deleted_count} 个账号，索引已自动重新分配",
         "deleted_count": deleted_count
     }
 
