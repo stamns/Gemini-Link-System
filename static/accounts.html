@@ -1,0 +1,601 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>账号管理 - Gemini Link System</title>
+    <link rel="icon" type="image/x-icon" href="/static/favicon.ico">
+    <link rel="stylesheet" href="/static/style.css">
+    <style>
+        .nav-tabs {
+            display: flex;
+            gap: 1rem;
+            margin-bottom: 2rem;
+            border-bottom: 2px solid var(--border-color);
+        }
+
+        .nav-tab {
+            padding: 0.75rem 1.5rem;
+            background: none;
+            border: none;
+            color: var(--text-secondary);
+            cursor: pointer;
+            font-size: 1rem;
+            border-bottom: 2px solid transparent;
+            margin-bottom: -2px;
+            transition: all 0.2s;
+        }
+
+        .nav-tab:hover {
+            color: var(--text-primary);
+        }
+
+        .nav-tab.active {
+            color: var(--primary-color);
+            border-bottom-color: var(--primary-color);
+        }
+
+        .status-badge {
+            display: inline-block;
+            padding: 0.25rem 0.75rem;
+            border-radius: 9999px;
+            font-size: 0.875rem;
+            font-weight: 500;
+        }
+
+        .status-available {
+            background-color: rgba(16, 185, 129, 0.2);
+            color: #10b981;
+        }
+
+        .status-unavailable {
+            background-color: rgba(239, 68, 68, 0.2);
+            color: #ef4444;
+        }
+
+        .status-unknown {
+            background-color: rgba(148, 163, 184, 0.2);
+            color: #94a3b8;
+        }
+
+        .account-form {
+            display: grid;
+            gap: 1.5rem;
+        }
+
+        .form-group label {
+            display: block;
+            margin-bottom: 0.5rem;
+            font-weight: 500;
+            color: var(--text-primary);
+        }
+
+        .form-group input {
+            width: 100%;
+            padding: 0.75rem;
+            background: var(--bg-input);
+            border: 1px solid var(--border-color);
+            border-radius: var(--radius-md);
+            color: var(--text-primary);
+            font-size: 1rem;
+        }
+
+        .form-group input:focus {
+            outline: none;
+            border-color: var(--primary-color);
+            box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.1);
+        }
+
+        .form-actions {
+            display: flex;
+            gap: 1rem;
+            justify-content: flex-end;
+        }
+
+        .warning-box {
+            background: rgba(245, 158, 11, 0.1);
+            border: 1px solid rgba(245, 158, 11, 0.3);
+            border-radius: var(--radius-md);
+            padding: 1rem;
+            margin-bottom: 1.5rem;
+            color: var(--warning-color);
+        }
+
+        .warning-box svg {
+            display: inline-block;
+            vertical-align: middle;
+            margin-right: 0.5rem;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="dashboard-container">
+        <header class="dashboard-header">
+            <div class="header-content">
+                <h1>
+                    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"></path>
+                        <circle cx="9" cy="7" r="4"></circle>
+                        <path d="M22 21v-2a4 4 0 0 0-3-3.87"></path>
+                        <path d="M16 3.13a4 4 0 0 1 0 7.75"></path>
+                    </svg>
+                    账号管理
+                </h1>
+                <div style="display: flex; gap: 1rem;">
+                    <a href="/static/dashboard.html" class="btn-secondary">返回密钥管理</a>
+                    <button id="logoutBtn" class="btn-secondary">退出登录</button>
+                </div>
+            </div>
+        </header>
+
+        <main class="dashboard-main">
+            <div class="warning-box">
+                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="12" cy="12" r="10"></circle>
+                    <line x1="12" y1="8" x2="12" y2="12"></line>
+                    <line x1="12" y1="16" x2="12.01" y2="16"></line>
+                </svg>
+                <strong>重要提示：</strong>修改账号配置后会自动重新加载，无需重启服务。请确保在修改前备份 .env 文件。
+            </div>
+
+            <!-- 账号列表 -->
+            <div class="card">
+                <div class="card-header-with-actions">
+                    <h2>账号列表</h2>
+                    <div style="display: flex; gap: 0.5rem;">
+                        <button id="bulkAddAccountBtn" class="btn-secondary">批量添加</button>
+                        <button id="addAccountBtn" class="btn-primary">添加账号</button>
+                    </div>
+                </div>
+                <div class="table-container">
+                    <table id="accountsTable">
+                        <thead>
+                            <tr>
+                                <th>索引</th>
+                                <th>名称</th>
+                                <th>CONFIG_ID</th>
+                                <th>状态</th>
+                                <th style="width: 250px;">操作</th>
+                            </tr>
+                        </thead>
+                        <tbody id="accountsTableBody">
+                            <tr>
+                                <td colspan="5" class="loading">加载中...</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- 添加/编辑账号模态框 -->
+    <div id="accountModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 id="modalTitle">添加账号</h2>
+                <button class="modal-close" onclick="closeAccountModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <form id="accountForm" class="account-form">
+                    <div class="form-group">
+                        <label for="accountName">账号名称 *</label>
+                        <input type="text" id="accountName" name="name" required placeholder="例如: account-1">
+                    </div>
+                    <div class="form-group">
+                        <label for="secureCSES">SECURE_C_SES *</label>
+                        <input type="text" id="secureCSES" name="secure_c_ses" required placeholder="请输入 SECURE_C_SES 值">
+                    </div>
+                    <div class="form-group">
+                        <label for="csesidx">CSESIDX *</label>
+                        <input type="text" id="csesidx" name="csesidx" required placeholder="请输入 CSESIDX 值">
+                    </div>
+                    <div class="form-group">
+                        <label for="configId">CONFIG_ID *</label>
+                        <input type="text" id="configId" name="config_id" required placeholder="请输入 CONFIG_ID 值">
+                    </div>
+                    <div class="form-group">
+                        <label for="hostCOSES">HOST_C_OSES (可选)</label>
+                        <input type="text" id="hostCOSES" name="host_c_oses" placeholder="请输入 HOST_C_OSES 值（可选）">
+                    </div>
+                    <div class="form-actions">
+                        <button type="button" class="btn-secondary" onclick="closeAccountModal()">取消</button>
+                        <button type="submit" class="btn-primary">保存</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- 批量添加账号模态框 -->
+    <div id="bulkAccountModal" class="modal">
+        <div class="modal-content" style="max-width: 800px;">
+            <div class="modal-header">
+                <h2>批量添加账号</h2>
+                <button class="modal-close" onclick="closeBulkAccountModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="warning-box" style="margin-bottom: 1rem;">
+                    <strong>格式说明：</strong>
+                    <p style="margin: 0.5rem 0 0 0; font-size: 0.9rem;">
+                        请粘贴包含账号信息的文本，系统会自动识别以下字段：<br>
+                        <strong>NAME</strong>、<strong>SECURE_C_SES</strong>、<strong>CSESIDX</strong>、<strong>CONFIG_ID</strong>、<strong>HOST_C_OSES</strong><br>
+                        <span style="font-size: 0.85rem; color: var(--text-secondary);">
+                            支持多种格式，例如：KEY=value、KEY: value、ACCOUNT1_NAME="value" 等，系统会自动识别。
+                        </span>
+                    </p>
+                </div>
+                <form id="bulkAccountForm" class="account-form">
+                    <div class="form-group">
+                        <label for="bulkAccountData">账号数据 *</label>
+                        <textarea 
+                            id="bulkAccountData" 
+                            name="bulk_data" 
+                            required 
+                            rows="10" 
+                            style="width: 100%; padding: 0.75rem; background: var(--bg-input); border: 1px solid var(--border-color); border-radius: var(--radius-md); color: var(--text-primary); font-size: 0.9rem; font-family: monospace; resize: vertical;"
+                            placeholder="请输入账号数据，每行一个账号..."></textarea>
+                    </div>
+                    <div class="form-actions">
+                        <button type="button" class="btn-secondary" onclick="closeBulkAccountModal()">取消</button>
+                        <button type="submit" class="btn-primary">批量添加</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const token = localStorage.getItem('token');
+        if (!token) {
+            window.location.href = '/static/index.html';
+        }
+
+        let accounts = [];
+        let editingIndex = null;
+
+        // 表格点击事件处理（事件委托）
+        function handleTableClick(e) {
+            const btn = e.target.closest('button');
+            if (!btn) return;
+
+            const index = parseInt(btn.getAttribute('data-index'));
+            if (isNaN(index)) return;
+
+            if (btn.classList.contains('test-btn')) {
+                testAccount(index);
+            } else if (btn.classList.contains('edit-btn')) {
+                editAccount(index);
+            } else if (btn.classList.contains('delete-btn')) {
+                deleteAccount(index);
+            }
+        }
+
+        // 加载账号列表
+        async function loadAccounts() {
+            try {
+                const response = await fetch('/admin/accounts', {
+                    headers: {
+                        'Authorization': `Bearer ${token}`
+                    }
+                });
+
+                if (response.status === 401) {
+                    localStorage.removeItem('token');
+                    window.location.href = '/static/index.html';
+                    return;
+                }
+
+                if (!response.ok) {
+                    throw new Error('加载账号失败');
+                }
+
+                accounts = await response.json();
+                renderAccounts();
+            } catch (error) {
+                console.error('加载账号失败:', error);
+                document.getElementById('accountsTableBody').innerHTML = 
+                    '<tr><td colspan="5" class="loading">加载失败，请刷新重试</td></tr>';
+            }
+        }
+
+        // 渲染账号列表
+        function renderAccounts() {
+            const tbody = document.getElementById('accountsTableBody');
+            if (accounts.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="5" class="loading">暂无账号，请添加</td></tr>';
+                return;
+            }
+
+            tbody.innerHTML = accounts.map(acc => {
+                const statusClass = acc.status === 'available' ? 'status-available' : 
+                                   acc.status === 'unavailable' ? 'status-unavailable' : 'status-unknown';
+                const statusText = acc.status === 'available' ? '可用' : 
+                                  acc.status === 'unavailable' ? '不可用' : '未知';
+
+                return `
+                    <tr>
+                        <td>${acc.index === 0 ? '默认' : acc.index}</td>
+                        <td>${acc.name}</td>
+                        <td style="font-family: monospace; font-size: 0.875rem;">${acc.config_id.substring(0, 30)}...</td>
+                        <td><span class="status-badge ${statusClass}">${statusText}</span></td>
+                        <td>
+                            <button class="btn-secondary test-btn" data-index="${acc.index}" style="margin-right: 0.5rem;">测试</button>
+                            <button class="btn-secondary edit-btn" data-index="${acc.index}" style="margin-right: 0.5rem;">编辑</button>
+                            ${acc.index > 0 ? `<button class="btn-danger delete-btn" data-index="${acc.index}">删除</button>` : ''}
+                        </td>
+                    </tr>
+                `;
+            }).join('');
+
+            // 事件委托已经在 tbody 上绑定，无需重复绑定
+        }
+
+        // 添加账号
+        const addAccountBtn = document.getElementById('addAccountBtn');
+        if (addAccountBtn) {
+            addAccountBtn.addEventListener('click', () => {
+                editingIndex = null;
+                document.getElementById('modalTitle').textContent = '添加账号';
+                document.getElementById('accountForm').reset();
+                document.getElementById('accountModal').style.display = 'flex';
+                document.getElementById('accountModal').classList.add('active');
+            });
+        }
+
+        // 批量添加账号
+        const bulkAddAccountBtn = document.getElementById('bulkAddAccountBtn');
+        if (bulkAddAccountBtn) {
+            bulkAddAccountBtn.addEventListener('click', () => {
+                document.getElementById('bulkAccountData').value = '';
+                document.getElementById('bulkAccountModal').style.display = 'flex';
+                document.getElementById('bulkAccountModal').classList.add('active');
+            });
+        }
+
+        // 编辑账号
+        function editAccount(index) {
+            const account = accounts.find(acc => acc.index === index);
+            if (!account) return;
+
+            editingIndex = index;
+            document.getElementById('modalTitle').textContent = '编辑账号';
+            document.getElementById('accountName').value = account.name;
+            document.getElementById('secureCSES').value = account.secure_c_ses;
+            document.getElementById('csesidx').value = account.csesidx;
+            document.getElementById('configId').value = account.config_id;
+            document.getElementById('hostCOSES').value = account.host_c_oses || '';
+            document.getElementById('accountModal').style.display = 'flex';
+            document.getElementById('accountModal').classList.add('active');
+        }
+
+        // 删除账号
+        async function deleteAccount(index) {
+            if (!confirm(`确定要删除账号索引 ${index} 吗？此操作不可恢复。`)) {
+                return;
+            }
+
+            try {
+                const response = await fetch(`/admin/accounts/${index}`, {
+                    method: 'DELETE',
+                    headers: {
+                        'Authorization': `Bearer ${token}`
+                    }
+                });
+
+                if (response.status === 401) {
+                    localStorage.removeItem('token');
+                    window.location.href = '/static/index.html';
+                    return;
+                }
+
+                if (!response.ok) {
+                    const error = await response.json();
+                    throw new Error(error.detail || '删除失败');
+                }
+
+                alert('账号已删除，配置已自动重新加载，无需重启服务。');
+                loadAccounts();
+            } catch (error) {
+                alert('删除失败: ' + error.message);
+            }
+        }
+
+        // 测试账号
+        async function testAccount(index) {
+            try {
+                const response = await fetch(`/admin/accounts/${index}/test`, {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${token}`
+                    }
+                });
+
+                if (response.status === 401) {
+                    localStorage.removeItem('token');
+                    window.location.href = '/static/index.html';
+                    return;
+                }
+
+                const result = await response.json();
+                if (result.status === 'success') {
+                    alert('✅ ' + result.message);
+                } else {
+                    alert('❌ ' + result.message);
+                }
+            } catch (error) {
+                alert('测试失败: ' + error.message);
+            }
+        }
+
+        // 提交表单
+        const accountForm = document.getElementById('accountForm');
+        if (accountForm) {
+            accountForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+
+            const formData = {
+                name: document.getElementById('accountName').value,
+                secure_c_ses: document.getElementById('secureCSES').value,
+                csesidx: document.getElementById('csesidx').value,
+                config_id: document.getElementById('configId').value,
+                host_c_oses: document.getElementById('hostCOSES').value
+            };
+
+            try {
+                let response;
+                if (editingIndex === null) {
+                    // 创建
+                    response = await fetch('/admin/accounts', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'Authorization': `Bearer ${token}`
+                        },
+                        body: JSON.stringify(formData)
+                    });
+                } else {
+                    // 更新
+                    response = await fetch(`/admin/accounts/${editingIndex}`, {
+                        method: 'PUT',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'Authorization': `Bearer ${token}`
+                        },
+                        body: JSON.stringify(formData)
+                    });
+                }
+
+                if (response.status === 401) {
+                    localStorage.removeItem('token');
+                    window.location.href = '/static/index.html';
+                    return;
+                }
+
+                if (!response.ok) {
+                    const error = await response.json();
+                    throw new Error(error.detail || '保存失败');
+                }
+
+                alert('账号已保存，配置已自动重新加载，无需重启服务。');
+                closeAccountModal();
+                loadAccounts();
+            } catch (error) {
+                alert('保存失败: ' + error.message);
+            }
+            });
+        }
+
+        // 关闭模态框
+        function closeAccountModal() {
+            const modal = document.getElementById('accountModal');
+            modal.style.display = 'none';
+            modal.classList.remove('active');
+            editingIndex = null;
+        }
+
+        // 关闭批量添加模态框
+        function closeBulkAccountModal() {
+            const modal = document.getElementById('bulkAccountModal');
+            modal.style.display = 'none';
+            modal.classList.remove('active');
+        }
+
+        // 批量添加账号表单提交
+        const bulkAccountForm = document.getElementById('bulkAccountForm');
+        if (bulkAccountForm) {
+            bulkAccountForm.addEventListener('submit', async (e) => {
+                e.preventDefault();
+                
+                const bulkData = document.getElementById('bulkAccountData').value.trim();
+                if (!bulkData) {
+                    alert('请输入账号数据');
+                    return;
+                }
+                
+                try {
+                    const response = await fetch('/admin/accounts/bulk', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'Authorization': `Bearer ${token}`
+                        },
+                        body: JSON.stringify({ text: bulkData })
+                    });
+
+                    if (response.status === 401) {
+                        localStorage.removeItem('token');
+                        window.location.href = '/static/index.html';
+                        return;
+                    }
+
+                    if (!response.ok) {
+                        const error = await response.json();
+                        throw new Error(error.detail || '批量添加失败');
+                    }
+
+                    const result = await response.json();
+                    let message = `成功创建 ${result.created_count} 个账号`;
+                    if (result.skipped_count > 0) {
+                        message += `\n跳过 ${result.skipped_count} 个重复账号：\n`;
+                        result.skipped.forEach((item, index) => {
+                            if (index < 5) {  // 最多显示5个
+                                message += `  - ${item.name}: ${item.reason}\n`;
+                            }
+                        });
+                        if (result.skipped_count > 5) {
+                            message += `  ... 还有 ${result.skipped_count - 5} 个`;
+                        }
+                    }
+                    alert(message + '\n\n配置已自动重新加载，无需重启服务。');
+                    closeBulkAccountModal();
+                    loadAccounts();
+                } catch (error) {
+                    alert('批量添加失败: ' + error.message);
+                }
+            });
+        }
+
+        // 退出登录
+        const logoutBtn = document.getElementById('logoutBtn');
+        if (logoutBtn) {
+            logoutBtn.addEventListener('click', () => {
+                localStorage.removeItem('token');
+                window.location.href = '/static/index.html';
+            });
+        }
+
+        // 点击模态框外部关闭
+        const accountModal = document.getElementById('accountModal');
+        if (accountModal) {
+            accountModal.addEventListener('click', (e) => {
+                if (e.target.id === 'accountModal') {
+                    closeAccountModal();
+                }
+            });
+        }
+
+        const bulkAccountModal = document.getElementById('bulkAccountModal');
+        if (bulkAccountModal) {
+            bulkAccountModal.addEventListener('click', (e) => {
+                if (e.target.id === 'bulkAccountModal') {
+                    closeBulkAccountModal();
+                }
+            });
+        }
+
+        // 初始化：绑定表格事件委托
+        const tbody = document.getElementById('accountsTableBody');
+        if (tbody) {
+            tbody.addEventListener('click', handleTableClick);
+        }
+
+        // 初始化：加载账号列表
+        loadAccounts();
+    </script>
+</body>
+
+</html>
+

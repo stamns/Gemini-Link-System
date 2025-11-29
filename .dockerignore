@@ -1,0 +1,23 @@
+<<<<<<< HEAD
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+*.egg
+*.egg-info
+dist
+build
+.env
+.env.*
+!.env.example
+*.db
+*.log
+logs/
+.git
+.gitignore
+.vscode
+.idea
+test_*.py
+

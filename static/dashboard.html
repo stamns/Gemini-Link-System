@@ -1,0 +1,410 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>API 密钥管理 - Gemini Link System</title>
+    <link rel="icon" type="image/x-icon" href="/static/favicon.ico">
+    <link rel="stylesheet" href="/static/style.css">
+    <style>
+        .account-form {
+            display: grid;
+            gap: 1.5rem;
+        }
+
+        .form-group {
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+        }
+
+        .form-group label {
+            font-size: 0.875rem;
+            font-weight: 500;
+            color: var(--text-primary);
+        }
+
+        .form-group input {
+            padding: 0.75rem 1rem;
+            background: var(--bg-input);
+            border: 1px solid var(--border-color);
+            border-radius: var(--radius-md);
+            color: var(--text-primary);
+            font-size: 0.95rem;
+            transition: all 0.2s;
+        }
+
+        .form-group input:focus {
+            outline: none;
+            border-color: var(--primary-color);
+            box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.2);
+        }
+
+        .form-actions {
+            display: flex;
+            gap: 1rem;
+            justify-content: flex-end;
+            margin-top: 1rem;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="dashboard-container">
+        <header class="dashboard-header">
+            <div class="header-content">
+                <h1>
+                    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"></path></svg>
+                    API 密钥管理
+                </h1>
+                <div style="display: flex; gap: 1rem;">
+                    <a href="/static/chat.html" class="btn-secondary">在线对话</a>
+                    <a href="/static/accounts.html" class="btn-secondary">账号管理</a>
+                    <button id="accountSettingsBtn" class="btn-secondary">账户设置</button>
+                    <button id="logoutBtn" class="btn-secondary">退出登录</button>
+                </div>
+            </div>
+        </header>
+
+        <main class="dashboard-main">
+            <!-- 统计卡片 -->
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <div class="stat-icon">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>
+                    </div>
+                    <div class="stat-info">
+                        <div class="stat-label">活跃密钥</div>
+                        <div class="stat-value" id="activeKeys">-</div>
+                    </div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-icon">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"></line><line x1="12" y1="20" x2="12" y2="4"></line><line x1="6" y1="20" x2="6" y2="14"></line></svg>
+                    </div>
+                    <div class="stat-info">
+                        <div class="stat-label">总调用次数</div>
+                        <div class="stat-value" id="totalUsage">-</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 生成密钥表单 -->
+            <div class="card">
+                <h2>生成新密钥</h2>
+                <form id="generateForm" class="generate-form">
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="count">数量</label>
+                            <input type="number" id="count" name="count" min="1" max="100" value="1" required>
+                        </div>
+                        <div class="form-group">
+                            <label for="expiresDays">有效期（天）</label>
+                            <input type="number" id="expiresDays" name="expiresDays" min="1" max="3650" value="30"
+                                required>
+                        </div>
+                        <div class="form-group">
+                            <label for="namePrefix">名称前缀</label>
+                            <input type="text" id="namePrefix" name="namePrefix" value="API Key" required>
+                        </div>
+                    </div>
+                    <button type="submit" class="btn-primary">生成密钥</button>
+                </form>
+            </div>
+
+            <!-- 密钥列表 -->
+            <div class="card">
+                <div class="card-header-with-actions">
+                    <h2>密钥列表</h2>
+                    <div>
+                        <button id="batchCopyBtn" class="btn-secondary" style="display: none; margin-right: 8px;"
+                            onclick="batchCopyKeys()">
+                            批量复制选中项
+                        </button>
+                        <button id="batchDeleteBtn" class="btn-danger" style="display: none;"
+                            onclick="batchDeleteKeys()">
+                            批量删除选中项
+                        </button>
+                    </div>
+                </div>
+                <div class="table-container">
+                    <table id="keysTable">
+                        <thead>
+                            <tr>
+                                <th style="width: 50px;">
+                                    <input type="checkbox" id="selectAll" onchange="toggleSelectAll(this)">
+                                </th>
+                                <th>ID</th>
+                                <th>创建时间</th>
+                                <th>过期时间</th>
+                                <th>状态</th>
+                                <th>使用次数</th>
+                                <th>最后使用</th>
+                                <th style="width: 200px;">操作</th>
+                            </tr>
+                        </thead>
+                        <tbody id="keysTableBody">
+                            <tr>
+                                <td colspan="8" class="loading">加载中...</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- 生成密钥成功模态框 -->
+    <div id="keysModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 style="display: flex; align-items: center; gap: 8px;">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.912 5.813a2 2 0 0 0 1.272 1.272L21 12l-5.813 1.912a2 2 0 0 0-1.272 1.272L12 21l-1.912-5.813a2 2 0 0 0-1.272-1.272L3 12l5.813-1.912a2 2 0 0 0 1.272-1.272L12 3z"></path></svg>
+                    密钥生成成功
+                </h2>
+                <button class="modal-close" onclick="closeModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <p class="info-message">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>
+                    密钥已生成，您可以随时在密钥列表中点击"查看复制"按钮查看。
+                </p>
+                <div id="generatedKeys" class="keys-list"></div>
+                <button class="btn-primary" onclick="copyAllKeys()">复制所有密钥</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 调用详情模态框 -->
+    <div id="logsModal" class="modal">
+        <div class="modal-content modal-large">
+            <div class="modal-header">
+                <h2 style="display: flex; align-items: center; gap: 8px;">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"></line><line x1="12" y1="20" x2="12" y2="4"></line><line x1="6" y1="20" x2="6" y2="14"></line></svg>
+                    <span id="logsModalTitle">调用详情</span>
+                </h2>
+                <button class="modal-close" onclick="closeLogsModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <!-- 统计卡片 -->
+                <div class="stats-grid-small">
+                    <div class="stat-card-small">
+                        <div class="stat-label">总调用</div>
+                        <div class="stat-value-small" id="statTotalCalls">-</div>
+                    </div>
+                    <div class="stat-card-small">
+                        <div class="stat-label">成功率</div>
+                        <div class="stat-value-small" id="statSuccessRate">-</div>
+                    </div>
+                    <div class="stat-card-small">
+                        <div class="stat-label">平均响应</div>
+                        <div class="stat-value-small" id="statAvgResponse">-</div>
+                    </div>
+                    <div class="stat-card-small">
+                        <div class="stat-label">错误次数</div>
+                        <div class="stat-value-small" id="statErrorCalls">-</div>
+                    </div>
+                </div>
+
+                <!-- 按模型统计 -->
+                <div class="section-title">按模型统计</div>
+                <div id="modelStatsContainer" class="model-stats-container"></div>
+
+                <!-- 最近7天趋势 -->
+                <div class="section-title">最近7天调用趋势</div>
+                <div id="dailyStatsChart" class="chart-container"></div>
+
+                <!-- 调用日志 -->
+                <div class="section-title">调用日志</div>
+                <div class="table-container">
+                    <table id="logsTable">
+                        <thead>
+                            <tr>
+                                <th>时间</th>
+                                <th>模型</th>
+                                <th>状态</th>
+                                <th>响应时间</th>
+                                <th>IP 地址</th>
+                                <th>端点</th>
+                            </tr>
+                        </thead>
+                        <tbody id="logsTableBody">
+                            <tr>
+                                <td colspan="6" class="loading">加载中...</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+
+                <!-- 分页 -->
+                <div id="logsPagination" class="pagination"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 账户设置模态框 -->
+    <div id="accountSettingsModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 style="display: flex; align-items: center; gap: 8px;">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>
+                    账户设置
+                </h2>
+                <button class="modal-close" onclick="closeAccountSettingsModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <!-- 修改用户名 -->
+                <div style="margin-bottom: 2rem;">
+                    <h3 style="margin-bottom: 1rem; color: var(--text-primary); font-size: 1.1rem;">修改用户名</h3>
+                    <form id="changeUsernameForm" class="account-form">
+                        <div class="form-group">
+                            <label for="newUsername">新用户名 *</label>
+                            <input type="text" id="newUsername" name="new_username" required placeholder="请输入新用户名" maxlength="50">
+                        </div>
+                        <div class="form-group">
+                            <label for="usernamePassword">当前密码 *</label>
+                            <input type="password" id="usernamePassword" name="password" required placeholder="请输入当前密码以验证身份">
+                        </div>
+                        <div class="form-actions">
+                            <button type="submit" class="btn-primary">修改用户名</button>
+                        </div>
+                    </form>
+                </div>
+
+                <hr style="border: none; border-top: 1px solid var(--border-color); margin: 2rem 0;">
+
+                <!-- 修改密码 -->
+                <div>
+                    <h3 style="margin-bottom: 1rem; color: var(--text-primary); font-size: 1.1rem;">修改密码</h3>
+                    <form id="changePasswordForm" class="account-form">
+                        <div class="form-group">
+                            <label for="oldPassword">当前密码 *</label>
+                            <input type="password" id="oldPassword" name="old_password" required placeholder="请输入当前密码">
+                        </div>
+                        <div class="form-group">
+                            <label for="newPassword">新密码 *</label>
+                            <input type="password" id="newPassword" name="new_password" required placeholder="请输入新密码（至少 6 位）" minlength="6">
+                        </div>
+                        <div class="form-group">
+                            <label for="confirmPassword">确认新密码 *</label>
+                            <input type="password" id="confirmPassword" name="confirm_password" required placeholder="请再次输入新密码" minlength="6">
+                        </div>
+                        <div class="form-actions">
+                            <button type="submit" class="btn-primary">修改密码</button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/app.js"></script>
+    <script>
+        // 账户设置功能
+        document.getElementById('accountSettingsBtn').addEventListener('click', () => {
+            document.getElementById('accountSettingsModal').classList.add('active');
+        });
+
+        window.closeAccountSettingsModal = function() {
+            document.getElementById('accountSettingsModal').classList.remove('active');
+            document.getElementById('changeUsernameForm').reset();
+            document.getElementById('changePasswordForm').reset();
+        };
+
+        // 修改用户名
+        document.getElementById('changeUsernameForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+
+            const newUsername = document.getElementById('newUsername').value.trim();
+            const password = document.getElementById('usernamePassword').value;
+
+            if (!newUsername) {
+                alert('用户名不能为空');
+                return;
+            }
+
+            if (newUsername.length > 50) {
+                alert('用户名长度不能超过 50 个字符');
+                return;
+            }
+
+            try {
+                const response = await apiRequest('/admin/change-username', {
+                    method: 'PUT',
+                    body: JSON.stringify({
+                        new_username: newUsername,
+                        password: password
+                    })
+                });
+
+                if (response.ok) {
+                    const data = await response.json();
+                    alert('用户名修改成功，请使用新用户名重新登录');
+                    closeAccountSettingsModal();
+                    // 退出登录
+                    localStorage.removeItem('token');
+                    window.location.href = '/static/index.html';
+                } else {
+                    const error = await response.json();
+                    throw new Error(error.detail || '修改用户名失败');
+                }
+            } catch (error) {
+                alert('修改用户名失败: ' + error.message);
+            }
+        });
+
+        // 修改密码
+        document.getElementById('changePasswordForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+
+            const oldPassword = document.getElementById('oldPassword').value;
+            const newPassword = document.getElementById('newPassword').value;
+            const confirmPassword = document.getElementById('confirmPassword').value;
+
+            // 验证新密码和确认密码是否一致
+            if (newPassword !== confirmPassword) {
+                alert('新密码和确认密码不一致，请重新输入');
+                return;
+            }
+
+            // 验证新密码长度
+            if (newPassword.length < 6) {
+                alert('新密码长度至少为 6 位');
+                return;
+            }
+
+            try {
+                const response = await apiRequest('/admin/change-password', {
+                    method: 'PUT',
+                    body: JSON.stringify({
+                        old_password: oldPassword,
+                        new_password: newPassword
+                    })
+                });
+
+                if (response.ok) {
+                    alert('密码修改成功，请使用新密码重新登录');
+                    closeAccountSettingsModal();
+                    // 退出登录
+                    localStorage.removeItem('token');
+                    window.location.href = '/static/index.html';
+                } else {
+                    const error = await response.json();
+                    throw new Error(error.detail || '修改密码失败');
+                }
+            } catch (error) {
+                alert('修改密码失败: ' + error.message);
+            }
+        });
+
+        // 点击模态框外部关闭
+        document.getElementById('accountSettingsModal').addEventListener('click', (e) => {
+            if (e.target.id === 'accountSettingsModal') {
+                closeAccountSettingsModal();
+            }
+        });
+    </script>
+</body>
+
+</html>
