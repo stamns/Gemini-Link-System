@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, FormEvent } from 'react';
+import { useState, useEffect, useCallback, type FormEvent } from 'react';
 import { Link } from 'react-router-dom';
 import { api, formatDate, getCookieStatusInfo, copyToClipboard } from '../api/client';
 import type { Account, AddAccountRequest } from '../api/types';

@@ -1,5 +1,5 @@
-import { useState, useEffect, useCallback, FormEvent } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { useState, useEffect, useCallback, type FormEvent } from 'react';
+import { Link } from 'react-router-dom';
 import { api, formatDate, formatShortDate, getKeyStatus, copyToClipboard, wsManager } from '../api/client';
 import type { Stats, APIKey, KeyStats, CallLog } from '../api/types';
 
@@ -26,8 +26,6 @@ const ChartIcon = () => (
 );
 
 export default function Dashboard() {
-  const navigate = useNavigate();
-  
   // 状态
   const [stats, setStats] = useState<Stats>({ active_keys: 0, total_usage: 0 });
   const [keys, setKeys] = useState<APIKey[]>([]);
@@ -45,7 +43,6 @@ export default function Dashboard() {
   const [generatedKeys, setGeneratedKeys] = useState<APIKey[]>([]);
   const [showKeysModal, setShowKeysModal] = useState(false);
   const [showLogsModal, setShowLogsModal] = useState(false);
-  const [showDetailModal, setShowDetailModal] = useState(false);
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [showKeepAliveModal, setShowKeepAliveModal] = useState(false);
   
@@ -56,7 +53,6 @@ export default function Dashboard() {
   const [logs, setLogs] = useState<CallLog[]>([]);
   const [logsPage, setLogsPage] = useState(1);
   const [logsTotal, setLogsTotal] = useState(0);
-  const [detailStats, setDetailStats] = useState<KeyStats | null>(null);
 
   // 加载统计
   const loadStats = useCallback(async () => {
@@ -169,18 +165,6 @@ export default function Dashboard() {
       }
     } catch (error) {
       alert('获取密钥失败: ' + (error instanceof Error ? error.message : '未知错误'));
-    }
-  };
-
-  // 查看密钥详情
-  const handleViewKeyStats = async (keyId: number) => {
-    setShowDetailModal(true);
-    setDetailStats(null);
-    try {
-      const data = await api.getKeyStats(keyId);
-      setDetailStats(data);
-    } catch (error) {
-      console.error('Failed to load key stats:', error);
     }
   };
 
@@ -637,81 +621,6 @@ export default function Dashboard() {
         </div>
       )}
 
-      {/* 密钥详情模态框 */}
-      {showDetailModal && (
-        <div className="modal active" onClick={(e) => e.target === e.currentTarget && setShowDetailModal(false)}>
-          <div className="modal-content">
-            <div className="modal-header">
-              <h2>📊 密钥使用详情</h2>
-              <button className="modal-close" onClick={() => setShowDetailModal(false)}>&times;</button>
-            </div>
-            <div className="modal-body">
-              {!detailStats ? (
-                <div className="loading-spinner">加载中...</div>
-              ) : (
-                <>
-                  <div className="detail-section">
-                    <h3>基本信息</h3>
-                    <div className="info-grid">
-                      <div className="info-item">
-                        <label>密钥名称</label>
-                        <div>{detailStats.key_name}</div>
-                      </div>
-                      <div className="info-item">
-                        <label>总调用次数</label>
-                        <div>{detailStats.total_calls}</div>
-                      </div>
-                      <div className="info-item">
-                        <label>成功率</label>
-                        <div className={detailStats.success_rate >= 90 ? 'text-success' : 'text-warning'}>
-                          {detailStats.success_rate}%
-                        </div>
-                      </div>
-                      <div className="info-item">
-                        <label>平均响应时间</label>
-                        <div>{detailStats.avg_response_time} ms</div>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="detail-section">
-                    <h3>模型使用分布</h3>
-                    <div className="stats-list">
-                      {detailStats.model_stats.length > 0 ? (
-                        detailStats.model_stats.map((s) => (
-                          <div key={s.model} className="stat-row">
-                            <span>{s.model}</span>
-                            <span>{s.count} 次</span>
-                          </div>
-                        ))
-                      ) : (
-                        <div className="no-data">暂无模型使用数据</div>
-                      )}
-                    </div>
-                  </div>
-
-                  <div className="detail-section">
-                    <h3>近7日调用趋势</h3>
-                    <div className="stats-list">
-                      {detailStats.daily_stats.length > 0 ? (
-                        detailStats.daily_stats.map((s) => (
-                          <div key={s.date} className="stat-row">
-                            <span>{s.date}</span>
-                            <span>{s.count} 次</span>
-                          </div>
-                        ))
-                      ) : (
-                        <div className="no-data">暂无近7日调用数据</div>
-                      )}
-                    </div>
-                  </div>
-                </>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
-
       {/* 账户设置模态框 */}
       {showSettingsModal && (
         <div className="modal active" onClick={(e) => e.target === e.currentTarget && setShowSettingsModal(false)}>
@@ -746,7 +655,7 @@ export default function Dashboard() {
 }
 
 // 账户设置组件
-function AccountSettings({ onClose }: { onClose: () => void }) {
+function AccountSettings({ onClose: _onClose }: { onClose: () => void }) {
   const [newUsername, setNewUsername] = useState('');
   const [usernamePassword, setUsernamePassword] = useState('');
   const [currentPassword, setCurrentPassword] = useState('');

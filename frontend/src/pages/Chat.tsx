@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, FormEvent, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, type FormEvent } from 'react';
 import { Link } from 'react-router-dom';
 import { api } from '../api/client';
 import { marked } from 'marked';
