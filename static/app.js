@@ -144,11 +144,14 @@ if (window.location.pathname.includes('dashboard.html')) {
                         <td>${key.usage_count}</td>
                         <td>${formatDate(key.last_used_at)}</td>
                         <td style="display: flex; gap: 6px;">
-                            <button class="btn-info" onclick="viewKeyLogs(${key.id}, 'API Key #${displayId}')" style="padding: 6px 8px;" title="查看详情">
+                            <button class="btn-info" onclick="viewKeyLogs(${key.id}, 'API Key #${displayId}')" style="padding: 6px 8px;" title="查看日志">
                                 <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"></line><line x1="12" y1="20" x2="12" y2="4"></line><line x1="6" y1="20" x2="6" y2="14"></line></svg>
                             </button>
                             <button class="btn-secondary" onclick="viewAndCopyKey(${key.id})" style="padding: 6px 8px;" title="查看复制">
                                 <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>
+                            </button>
+                            <button class="btn-info" onclick="viewKeyStats(${key.id})" style="padding: 6px 8px;" title="查看详情">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line><line x1="10" y1="9" x2="8" y2="9"></line></svg>
                             </button>
                             <button class="btn-danger" onclick="revokeKey(${key.id})" style="padding: 6px 8px;" title="撤销">
                                 <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
@@ -258,6 +261,83 @@ if (window.location.pathname.includes('dashboard.html')) {
         } catch (error) {
             alert('获取密钥失败: ' + error.message);
         }
+    };
+
+    // 查看密钥详情统计
+    window.viewKeyStats = async function (keyId) {
+        const modal = document.getElementById('keyDetailModal');
+        const content = document.getElementById('keyDetailContent');
+
+        modal.classList.add('active');
+        content.innerHTML = '<div class="loading">加载统计数据...</div>';
+
+        try {
+            const response = await apiRequest(`/admin/api-keys/${keyId}/stats`);
+            const data = await response.json();
+
+            // 构建模型使用分布 HTML
+            const modelStatsHtml = data.model_stats.length > 0
+                ? data.model_stats.map(s => `
+                    <div class="stat-row">
+                        <span>${s.model}</span>
+                        <span>${s.count} 次</span>
+                    </div>`).join('')
+                : '<div class="no-data">暂无模型使用数据</div>';
+
+            // 构建每日调用趋势 HTML
+            const dailyStatsHtml = data.daily_stats.length > 0
+                ? data.daily_stats.map(s => `
+                    <div class="stat-row">
+                        <span>${s.date}</span>
+                        <span>${s.count} 次</span>
+                    </div>`).join('')
+                : '<div class="no-data">暂无近7日调用数据</div>';
+
+            content.innerHTML = `
+                <div class="detail-section">
+                    <h3>基本信息</h3>
+                    <div class="info-grid">
+                        <div class="info-item">
+                            <label>密钥名称</label>
+                            <div>${data.key_name}</div>
+                        </div>
+                        <div class="info-item">
+                            <label>总调用次数</label>
+                            <div>${data.total_calls}</div>
+                        </div>
+                        <div class="info-item">
+                            <label>成功率</label>
+                            <div class="${data.success_rate >= 90 ? 'text-success' : 'text-warning'}">${data.success_rate}%</div>
+                        </div>
+                        <div class="info-item">
+                            <label>平均响应时间</label>
+                            <div>${data.avg_response_time} ms</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="detail-section">
+                    <h3>模型使用分布</h3>
+                    <div class="stats-list">
+                        ${modelStatsHtml}
+                    </div>
+                </div>
+
+                <div class="detail-section">
+                    <h3>近7日调用趋势</h3>
+                    <div class="stats-list">
+                        ${dailyStatsHtml}
+                    </div>
+                </div>
+            `;
+        } catch (error) {
+            content.innerHTML = `<div class="error-message">加载失败: ${error.message}</div>`;
+        }
+    };
+
+    // 关闭详情模态框
+    window.closeKeyDetailModal = function () {
+        document.getElementById('keyDetailModal').classList.remove('active');
     };
 
     // 撤销密钥
@@ -442,8 +522,8 @@ if (window.location.pathname.includes('dashboard.html')) {
 
             tbody.innerHTML = data.logs.map(log => {
                 const statusClass = log.status === 'success' ? 'status-active' : 'status-inactive';
-                const statusIcon = log.status === 'success' 
-                    ? '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:4px"><polyline points="20 6 9 17 4 12"></polyline></svg>' 
+                const statusIcon = log.status === 'success'
+                    ? '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:4px"><polyline points="20 6 9 17 4 12"></polyline></svg>'
                     : '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:4px"><circle cx="12" cy="12" r="10"></circle><line x1="15" y1="9" x2="9" y2="15"></line><line x1="9" y1="9" x2="15" y2="15"></line></svg>';
                 const statusText = log.status === 'success' ? '成功' : '失败';
 
@@ -584,7 +664,7 @@ if (window.location.pathname.includes('dashboard.html')) {
                     // 为了简单，这里选择如果用户正在操作就不刷新列表，以免丢失选中状态
                     console.log('User is interacting with list, skipping list refresh');
                 }
-                
+
                 // 如果日志模态框打开，刷新日志
                 if (document.getElementById('logsModal').classList.contains('active')) {
                     const title = document.getElementById('logsModalTitle').textContent;
@@ -602,12 +682,12 @@ if (window.location.pathname.includes('dashboard.html')) {
             // 断线重连
             setTimeout(connectWebSocket, 5000);
         };
-        
+
         ws.onerror = function (err) {
             console.error('WebSocket error:', err);
             ws.close();
         };
     }
-    
+
     connectWebSocket();
 }

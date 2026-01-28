@@ -1,0 +1,47 @@
+version: '3.8'
+
+services:
+  # 前端服务 (Nginx)
+  frontend:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.frontend
+    container_name: gemini-frontend
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
+    networks:
+      - gemini-network
+
+  # 后端服务 (FastAPI)
+  backend:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.backend
+    container_name: gemini-backend
+    ports:
+      - "4500:4500"
+    environment:
+      - CORS_ORIGINS=http://localhost,http://localhost:80,http://frontend
+      - HTTP_PROXY=${HTTP_PROXY:-}
+      - HTTPS_PROXY=${HTTPS_PROXY:-}
+      - ALL_PROXY=${ALL_PROXY:-}
+      - PROXY=${PROXY:-}
+      - no_proxy=localhost,127.0.0.1,backend,frontend
+    volumes:
+      - ../backend/.env:/app/.env:ro
+      - gemini-data:/app/geminibusiness.db
+      - gemini-images:/app/generated_images
+    restart: unless-stopped
+    networks:
+      - gemini-network
+
+networks:
+  gemini-network:
+    driver: bridge
+
+volumes:
+  gemini-data:
+  gemini-images:

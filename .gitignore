@@ -1,0 +1,67 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+ENV/
+
+# Node.js
+node_modules/
+dist/
+.npm
+*.log
+
+# Environment (contains sensitive account info)
+.env
+.env.local
+.env.*.local
+backend/.env
+frontend/.env
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Generated images
+generated_images/*.png
+backend/generated_images/*.png
+!generated_images/.gitkeep
+!backend/generated_images/.gitkeep
+
+# Sensitive config files
+backend/login_emails.txt
+backend/gemini_business_login_configs.txt
+*.txt
+!README.txt
+!requirements.txt
+
+# Build
+build/
+*.egg-info/
+
+# Logs
+logs/
+*.log
+
+# Testing
+.coverage
+htmlcov/
+.pytest_cache/
+
+# Temp
+*.tmp
+*.temp

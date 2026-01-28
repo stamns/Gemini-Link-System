@@ -1,0 +1,32 @@
+# 后端 Dockerfile
+FROM python:3.10-slim
+
+WORKDIR /app
+
+# 安装系统依赖（用于 Selenium）
+RUN apt-get update && apt-get install -y \
+    chromium \
+    chromium-driver \
+    && rm -rf /var/lib/apt/lists/*
+
+# 复制依赖文件
+COPY backend/requirements.txt ./
+
+# 安装 Python 依赖
+RUN pip install --no-cache-dir -r requirements.txt
+
+# 复制后端代码
+COPY backend/ ./
+
+# 创建必要的目录
+RUN mkdir -p generated_images
+
+# 设置环境变量
+ENV PYTHONUNBUFFERED=1
+ENV CORS_ORIGINS=http://localhost,http://localhost:80,http://localhost:5000,http://frontend
+
+# 暴露端口
+EXPOSE 4500
+
+# 启动命令
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "4500"]
